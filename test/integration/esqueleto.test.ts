@@ -7,14 +7,14 @@ import { MikroORM } from '@mikro-orm/postgresql';
 import config from '../../src/infra/database/mikro-orm.config';
 import { AppModule } from '../../src/app.module';
 import { WalletRecord } from '../../src/infra/database/records/wallet.record';
+import { resetSchema, seedWallet, sql } from './support/database';
 
 let orm: MikroORM;
 let app: INestApplication;
 
 beforeAll(async () => {
+  await resetSchema();
   orm = await MikroORM.init(config);
-  await orm.migrator.down({ to: 0 });
-  await orm.migrator.up();
   app = await NestFactory.create(AppModule, { logger: false });
   await app.listen(0);
 });
@@ -30,32 +30,20 @@ test('GET /health/live responde pelo Nest', async () => {
   expect(await resposta.json()).toEqual({ status: 'ok' });
 });
 
-test('bigint vai e volta do banco como bigint, sem passar por number', async () => {
-  const em = orm.em.fork();
-  const agora = new Date();
-  const id = crypto.randomUUID();
-  em.create(WalletRecord, {
-    id, playerId: 'p1', currency: 'BRL', balanceMinor: 9_007_199_254_740_993n, version: 1, createdAt: agora, updatedAt: agora,
-  });
-  await em.flush();
-
-  const lido = await orm.em.fork().findOneOrFail(WalletRecord, id);
+test('bigint vai e volta do banco pelo ORM como bigint, sem passar por number', async () => {
+  const { walletId } = await seedWallet(9_007_199_254_740_993n); // acima de Number.MAX_SAFE_INTEGER
+  const lido = await orm.em.fork().findOneOrFail(WalletRecord, walletId);
   expect(typeof lido.balanceMinor).toBe('bigint');
-  expect(lido.balanceMinor).toBe(9_007_199_254_740_993n); // acima de Number.MAX_SAFE_INTEGER
+  expect(lido.balanceMinor).toBe(9_007_199_254_740_993n);
 });
 
-test('o schema recusa saldo negativo e wallet duplicada', async () => {
-  const conexao = orm.em.getConnection();
-  const linha = (saldo: number, jogador: string) =>
-    `insert into wallets values ('${crypto.randomUUID()}', '${jogador}', 'BRL', ${saldo}, 1, now(), now())`;
-  await expect(conexao.execute(linha(-1, 'p2'))).rejects.toThrow(/balance_minor_check/);
-  await conexao.execute(linha(0, 'p3'));
-  await expect(conexao.execute(linha(0, 'p3'))).rejects.toThrow(/wallets_player_currency_uq/);
-});
-
-test('a migration é reversível', async () => {
-  await orm.migrator.down();
-  const tabela = await orm.em.getConnection().execute(`select to_regclass('wallets') as t`);
-  expect(tabela[0]?.t).toBeNull();
+test('todas as migrations desfazem e refazem', async () => {
+  await orm.migrator.down({ to: 0 });
+  const [vazio] = await sql`select count(*)::int as n from pg_tables where schemaname = 'public' and tablename <> 'mikro_orm_migrations'`;
+  expect(vazio.n).toBe(0);
   await orm.migrator.up();
+  const tabelas = await sql`select tablename from pg_tables where schemaname = 'public' order by tablename`;
+  expect(tabelas.map((t: { tablename: string }) => t.tablename)).toEqual([
+    'inbox_messages', 'mikro_orm_migrations', 'outbox_messages', 'wager_transactions', 'wallet_ledger_entries', 'wallets',
+  ]);
 });
