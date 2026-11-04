@@ -12,3 +12,17 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # Emulador de SQS. LocalStack exige token desde 2026; MiniStack não (ver ARCHITECTURE.md).
+  sqs:
+    image: ministackorg/ministack:1.5.37
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./infra/ministack/01-filas.sh:/etc/localstack/init/ready.d/01-filas.sh:ro
+    healthcheck:
+      # Pronto só quando a fila principal existe, não só quando o processo sobe.
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name wager-transactions.fifo"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
