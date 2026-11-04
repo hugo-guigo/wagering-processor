@@ -9,6 +9,8 @@ import { asObject, parseWagerPayload, requireString } from '../../application/in
 import { payloadHash, type WagerPayload } from '../../application/payload-hash';
 import { InvalidMoneyError, InvalidWagerTransactionError } from '../../domain/errors';
 import { QUEUES, SqsQueues } from './sqs';
+import { metrics } from '../observability/metrics';
+import { recordOutcome } from '../observability/record-outcome';
 
 export const CONSUMER_NAME = 'wager-transactions-consumer';
 
@@ -158,11 +160,13 @@ export class SqsWagerConsumer {
         if (seen.payloadHash !== hash) {
           return this.deadLetter(message, new Error(`messageId ${parsed.messageId} reused with a different payload`));
         }
+        metrics.duplicates.inc({ type: 'inbox_message' });
         this.logger.log(`duplicate message ${parsed.messageId} ignored`);
         return this.ack(message);
       }
 
-      await this.processWager.execute(
+      const timer = metrics.processing.startTimer({ source: 'sqs' });
+      const outcome = await this.processWager.execute(
         {
           idempotencyKey: parsed.idempotencyKey,
           payload: parsed.payload,
@@ -170,6 +174,7 @@ export class SqsWagerConsumer {
         },
         { correlationId: parsed.messageId, causationId: parsed.messageId },
       );
+      recordOutcome(outcome, parsed.payload, 'sqs', { correlationId: parsed.messageId, messageId: parsed.messageId }, timer);
 
       // Falha injetada para o teste "worker morto depois do commit e antes do ack".
       if (process.env.FAIL_AFTER_COMMIT === '1') {
@@ -194,6 +199,7 @@ export class SqsWagerConsumer {
   private async retryLater(message: Message, error: unknown): Promise<void> {
     const receives = Number(message.Attributes?.ApproximateReceiveCount ?? 1);
     const delay = Math.min(this.backoffBaseSeconds * 2 ** (receives - 1), 60);
+    metrics.retries.inc({ component: 'consumer' });
     this.logger.warn(`message ${message.MessageId} will be retried in ${delay}s (receive ${receives}): ${describe(error)}`);
     await this.setVisibility(message, delay);
   }
@@ -217,6 +223,7 @@ export class SqsWagerConsumer {
 
   /** Copia para a DLQ com o motivo e só então apaga da fila principal. */
   private async deadLetter(message: Message, error: unknown): Promise<void> {
+    metrics.deadLettered.inc({ reason: error instanceof Error ? error.name : 'unknown' });
     this.logger.warn(`message ${message.MessageId} sent to the DLQ: ${describe(error)}`);
     await this.queues.client.send(new SendMessageCommand({
       QueueUrl: await this.queues.url(QUEUES.wagersDeadLetter),

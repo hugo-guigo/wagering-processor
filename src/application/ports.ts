@@ -4,6 +4,12 @@ import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry';
 import type { OutboxMessage } from '../domain/messaging/outbox-message';
 import type { InboxMessage } from '../domain/messaging/inbox-message';
 
+export interface LedgerPageItem {
+  entry: WalletLedgerEntry;
+  /** Posição estável no ledger (identity), usada no cursor. */
+  seq: bigint;
+}
+
 /**
  * Acesso ao banco dentro de UMA transação SQL. Tudo o que é adicionado aqui é gravado junto no
  * COMMIT, ou nada é. As portas são classes abstratas para servirem de token de injeção no Nest.
@@ -11,6 +17,8 @@ import type { InboxMessage } from '../domain/messaging/inbox-message';
 export abstract class WalletStore {
   /** SELECT ... FOR UPDATE na linha da wallet: serializa as operações da mesma wallet. */
   abstract lockWallet(walletId: string): Promise<Wallet | undefined>;
+  /** Leitura sem trava (consultas). */
+  abstract findWallet(walletId: string): Promise<Wallet | undefined>;
   abstract addWallet(wallet: Wallet): void;
   abstract saveWallet(wallet: Wallet): void;
 
@@ -23,6 +31,10 @@ export abstract class WalletStore {
   abstract saveTransaction(tx: WagerTransaction): void;
 
   abstract addLedgerEntry(entry: WalletLedgerEntry): void;
+  /** Extrato do mais novo para o mais antigo, a partir de um `seq` exclusivo. */
+  abstract listLedger(walletId: string, beforeSeq: bigint | undefined, limit: number): Promise<LedgerPageItem[]>;
+  /** Soma com sinal (créditos menos débitos) e quantidade de lançamentos da wallet. */
+  abstract ledgerTotals(walletId: string): Promise<{ netMinor: bigint; entries: number }>;
   abstract enqueue(message: OutboxMessage): void;
   abstract addInboxMessage(message: InboxMessage, transactionId?: string): void;
   abstract findInboxMessage(consumerName: string, messageId: string): Promise<InboxMessage | undefined>;

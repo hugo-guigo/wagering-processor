@@ -6,6 +6,8 @@ export interface ResolveResult {
   processed: number;
   rejected: number;
   rescheduled: number;
+  /** Estado e tipo de cada transação tratada, para as métricas. */
+  outcomes: { status: string; kind: string }[];
 }
 
 /**
@@ -22,9 +24,9 @@ export class ResolvePendingReferences {
   ) {}
 
   async runOnce(limit = 50): Promise<ResolveResult> {
-    const result: ResolveResult = { handled: 0, processed: 0, rejected: 0, rescheduled: 0 };
+    const result: ResolveResult = { handled: 0, processed: 0, rejected: 0, rescheduled: 0, outcomes: [] };
     while (result.handled < limit) {
-      const status = await this.runner.run(async (store) => {
+      const handled = await this.runner.run(async (store) => {
         const now = this.clock.now();
         const tx = await store.claimDuePendingReference(now);
         if (!tx) return undefined;
@@ -42,9 +44,11 @@ export class ResolvePendingReferences {
         this.settlement.enqueueEvents(
           store, tx, wallet, entry, { correlationId: tx.id, causationId: tx.id, occurredAt: now }, previousStatus,
         );
-        return tx.status;
+        return { status: tx.status, kind: tx.kind };
       });
-      if (status === undefined) break;
+      if (handled === undefined) break;
+      const { status } = handled;
+      result.outcomes.push(handled);
       result.handled += 1;
       if (status === 'PROCESSED') result.processed += 1;
       else if (status === 'REJECTED') result.rejected += 1;

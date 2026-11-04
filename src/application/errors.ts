@@ -47,3 +47,14 @@ export class TransientInfrastructureError extends Error {
     this.name = 'TransientInfrastructureError';
   }
 }
+
+/** Recurso consultado não existe (404). */
+export class NotFoundError extends Error {
+  readonly code: string;
+
+  constructor(resource: string, id: string) {
+    super(`${resource} ${id} not found`);
+    this.name = 'NotFoundError';
+    this.code = `${resource.toUpperCase()}_NOT_FOUND`;
+  }
+}

@@ -3,7 +3,10 @@ import {
   ConnectionException, DeadlockException, LockMode, LockWaitTimeoutException, MikroORM,
   UniqueConstraintViolationException, type EntityManager,
 } from '@mikro-orm/postgresql';
-import { TransactionRunner, WalletStore } from '../../application/ports';
+import { TransactionRunner, WalletStore, type LedgerPageItem } from '../../application/ports';
+import { Money } from '../../domain/money';
+import { WalletLedgerEntry as LedgerEntry, type LedgerDirection } from '../../domain/wallet-ledger-entry';
+import { metrics } from '../observability/metrics';
 import { TransientInfrastructureError, UniqueViolationError } from '../../application/errors';
 import type { Wallet } from '../../domain/wallet';
 import type { WagerTransaction } from '../../domain/wager-transaction';
@@ -41,10 +44,17 @@ class MikroOrmWalletStore extends WalletStore {
   }
 
   async lockWallet(walletId: string): Promise<Wallet | undefined> {
+    const stopTimer = metrics.lockWait.startTimer();
     const record = await this.em.findOne(WalletRecord, { id: walletId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+    stopTimer();
     if (!record) return undefined;
     this.lockedWallets.set(walletId, record);
     return walletFromRecord(record);
+  }
+
+  async findWallet(walletId: string): Promise<Wallet | undefined> {
+    const record = await this.em.findOne(WalletRecord, { id: walletId });
+    return record ? walletFromRecord(record) : undefined;
   }
 
   addWallet(wallet: Wallet): void {
@@ -91,6 +101,30 @@ class MikroOrmWalletStore extends WalletStore {
 
   addLedgerEntry(entry: WalletLedgerEntry): void {
     this.em.create(LedgerEntryRecord, ledgerEntryToRecordData(entry));
+  }
+
+  async listLedger(walletId: string, beforeSeq: bigint | undefined, limit: number): Promise<LedgerPageItem[]> {
+    // SQL direto: `seq` não é mapeado no registro (o banco gera) e é a chave do cursor.
+    const rows = await this.em.execute<LedgerRow[]>(
+      `select id, seq, wallet_id, transaction_id, direction, amount_minor, currency,
+              balance_before_minor, balance_after_minor, created_at
+         from wallet_ledger_entries
+        where wallet_id = ? and (?::bigint is null or seq < ?::bigint)
+        order by seq desc
+        limit ?`,
+      [walletId, beforeSeq?.toString() ?? null, beforeSeq?.toString() ?? null, limit],
+    );
+    return rows.map((row) => ({ seq: BigInt(row.seq), entry: ledgerFromRow(row) }));
+  }
+
+  async ledgerTotals(walletId: string): Promise<{ netMinor: bigint; entries: number }> {
+    const [row] = await this.em.execute<{ net: string; entries: string }[]>(
+      `select coalesce(sum(case direction when 'CREDIT' then amount_minor else -amount_minor end), 0)::text as net,
+              count(*)::text as entries
+         from wallet_ledger_entries where wallet_id = ?`,
+      [walletId],
+    );
+    return { netMinor: BigInt(row?.net ?? '0'), entries: Number(row?.entries ?? 0) };
   }
 
   enqueue(message: OutboxMessage): void {
@@ -144,6 +178,33 @@ class MikroOrmWalletStore extends WalletStore {
   }
 }
 
+interface LedgerRow {
+  id: string;
+  seq: string;
+  wallet_id: string;
+  transaction_id: string;
+  direction: string;
+  amount_minor: string;
+  currency: string;
+  balance_before_minor: string;
+  balance_after_minor: string;
+  created_at: Date;
+}
+
+function ledgerFromRow(row: LedgerRow): LedgerEntry {
+  const money = (minor: string) => Money.fromMinor(BigInt(minor), row.currency);
+  return LedgerEntry.rehydrate({
+    id: row.id,
+    walletId: row.wallet_id,
+    transactionId: row.transaction_id,
+    direction: row.direction as LedgerDirection,
+    money: money(row.amount_minor),
+    balanceBefore: money(row.balance_before_minor),
+    balanceAfter: money(row.balance_after_minor),
+    createdAt: new Date(row.created_at),
+  });
+}
+
 @Injectable()
 export class MikroOrmTransactionRunner extends TransactionRunner {
   constructor(private readonly orm: MikroORM) {
@@ -169,6 +230,8 @@ function translate(error: unknown): unknown {
     const constraint = /unique constraint "([^"]+)"/.exec(error.message)?.[1];
     return new UniqueViolationError(constraint, error);
   }
+  if (error instanceof LockWaitTimeoutException) metrics.lockConflicts.inc({ type: 'lock_timeout' });
+  if (error instanceof DeadlockException) metrics.lockConflicts.inc({ type: 'deadlock' });
   if (error instanceof LockWaitTimeoutException || error instanceof DeadlockException || error instanceof ConnectionException) {
     return new TransientInfrastructureError(error.constructor.name, error);
   }

@@ -1,7 +1,8 @@
 import { Catch, HttpException, Logger, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
 import {
-  IdempotencyConflictError, InvalidRequestError, TransientInfrastructureError, WalletAlreadyExistsError,
+  IdempotencyConflictError, InvalidRequestError, NotFoundError, TransientInfrastructureError, WalletAlreadyExistsError,
 } from '../application/errors';
+import { metrics } from '../infra/observability/metrics';
 import { InvalidMoneyError, InvalidWagerTransactionError, InvalidWalletError } from '../domain/errors';
 
 interface HttpResponse {
@@ -32,7 +33,11 @@ export class HttpErrorFilter implements ExceptionFilter {
     if (error instanceof InvalidMoneyError || error instanceof InvalidWagerTransactionError || error instanceof InvalidWalletError) {
       return { status: 400, body: { error: { code: error.code, message: error.message } } };
     }
+    if (error instanceof NotFoundError) {
+      return { status: 404, body: { error: { code: error.code, message: error.message } } };
+    }
     if (error instanceof IdempotencyConflictError) {
+      metrics.duplicates.inc({ type: 'idempotency_conflict' });
       return {
         status: 409,
         body: { error: { code: error.code, message: error.message, existingTransactionId: error.existingTransactionId } },
