@@ -1,7 +1,7 @@
 import { Body, Controller, Headers, HttpCode, Post, Res } from '@nestjs/common';
 import { OpenWallet } from '../application/open-wallet';
 import { ProcessWagerTransaction } from '../application/process-wager-transaction';
-import { asObject, parseWagerPayload, requireIdempotencyKey, requireMoney, requireString } from './request-validation';
+import { asObject, parseWagerPayload, requireIdempotencyKey, requireMoney, requireString } from '../application/input-validation';
 import { wagerResponse, type WagerResponseBody } from './responses';
 
 interface StatusResponse {

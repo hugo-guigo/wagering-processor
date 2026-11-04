@@ -7,8 +7,8 @@ import {
 } from '../../domain/wager-transaction';
 import type { FailureCode } from '../../domain/failure-code';
 import type { LedgerDirection, WalletLedgerEntry } from '../../domain/wallet-ledger-entry';
-import type { OutboxMessage } from '../../domain/messaging/outbox-message';
-import type { InboxMessage } from '../../domain/messaging/inbox-message';
+import { OutboxMessage } from '../../domain/messaging/outbox-message';
+import { InboxMessage } from '../../domain/messaging/inbox-message';
 import type { WalletRecord } from './records/wallet.record';
 import type { WagerTransactionRecord } from './records/wager-transaction.record';
 import type { LedgerEntryRecord } from './records/ledger-entry.record';
@@ -126,6 +126,29 @@ export function outboxToRecordData(m: OutboxMessage) {
     publishedAt: m.publishedAt ?? null,
     lastError: null,
   };
+}
+
+export function outboxFromRecord(r: OutboxMessageRecord): OutboxMessage {
+  return OutboxMessage.rehydrate({
+    id: r.id,
+    aggregateId: r.aggregateId,
+    eventType: r.eventType,
+    payload: r.payload,
+    occurredAt: r.occurredAt,
+    attempts: r.attempts,
+    nextAttemptAt: r.nextAttemptAt,
+    publishedAt: orUndefined(r.publishedAt),
+  });
+}
+
+export function inboxFromRecord(r: InboxMessageRecord): InboxMessage {
+  return InboxMessage.rehydrate({
+    messageId: r.messageId,
+    consumerName: r.consumerName,
+    payloadHash: r.payloadHash,
+    receivedAt: r.receivedAt,
+    processedAt: orUndefined(r.processedAt),
+  });
 }
 
 export function inboxToRecordData(m: InboxMessage, transactionId?: string) {

@@ -4,8 +4,17 @@ import type { INestApplication } from '@nestjs/common';
 import { AppModule } from '../../src/app.module';
 import { sql } from '../integration/support/database';
 
+const TUNABLES = [
+  'WORKERS', 'LOCK_TIMEOUT', 'CONSUMER_BACKOFF_BASE_SECONDS', 'FAIL_AFTER_COMMIT',
+  'REFERENCE_RETRY_BASE_MS', 'REFERENCE_RETRY_MAX_DELAY_MS', 'REFERENCE_RETRY_MAX_ATTEMPTS',
+];
+
 /** Sobe o app de verdade (Nest + Postgres do compose) numa porta livre. */
-export async function startApp(): Promise<{ app: INestApplication; url: string }> {
+export async function startApp(env: Record<string, string> = {}): Promise<{ app: INestApplication; url: string }> {
+  // Por padrão sem trabalhos de fundo: cada teste chama o worker que quer, na hora que quer.
+  // As variáveis de ajuste são zeradas a cada app, para um arquivo de teste não vazar para o outro.
+  for (const name of TUNABLES) delete process.env[name];
+  Object.assign(process.env, { WORKERS: '', ...env });
   const app = await NestFactory.create(AppModule, { logger: ['error'] });
   await app.listen(0);
   return { app, url: (await app.getUrl()).replace('[::1]', 'localhost') };

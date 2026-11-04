@@ -15,12 +15,16 @@ import { WagerTransactionRecord } from './records/wager-transaction.record';
 import { LedgerEntryRecord } from './records/ledger-entry.record';
 import { InboxMessageRecord, OutboxMessageRecord } from './records/messaging.record';
 import {
-  inboxToRecordData, ledgerEntryToRecordData, outboxToRecordData, transactionFromRecord, transactionStateData,
-  transactionToRecordData, walletFromRecord, walletToRecordData,
+  inboxFromRecord, inboxToRecordData, ledgerEntryToRecordData, outboxFromRecord, outboxToRecordData, transactionFromRecord,
+  transactionStateData, transactionToRecordData, walletFromRecord, walletToRecordData,
 } from './mappers';
 
 /** Quanto uma operação espera pela trava de uma wallet ocupada antes de desistir (vira 503). */
-export const LOCK_TIMEOUT = process.env.LOCK_TIMEOUT ?? '5s';
+function lockTimeout(): string {
+  const value = process.env.LOCK_TIMEOUT ?? '5s';
+  if (!/^\d+(ms|s)$/.test(value)) throw new Error(`invalid LOCK_TIMEOUT ${value}`);
+  return value;
+}
 
 /**
  * `WalletStore` sobre o EntityManager de UMA transação. As escritas só registram no Unit of Work;
@@ -30,6 +34,7 @@ class MikroOrmWalletStore extends WalletStore {
   /** Registros carregados com lock, para atualizar a mesma instância que o Unit of Work rastreia. */
   private readonly lockedWallets = new Map<string, WalletRecord>();
   private readonly loadedTransactions = new Map<string, WagerTransactionRecord>();
+  private readonly loadedOutbox = new Map<string, OutboxMessageRecord>();
 
   constructor(private readonly em: EntityManager) {
     super();
@@ -96,6 +101,42 @@ class MikroOrmWalletStore extends WalletStore {
     this.em.create(InboxMessageRecord, inboxToRecordData(message, transactionId));
   }
 
+  async findInboxMessage(consumerName: string, messageId: string): Promise<InboxMessage | undefined> {
+    const record = await this.em.findOne(InboxMessageRecord, { consumerName, messageId });
+    return record ? inboxFromRecord(record) : undefined;
+  }
+
+  async claimDuePendingReference(now: Date): Promise<WagerTransaction | undefined> {
+    const record = await this.em.findOne(
+      WagerTransactionRecord,
+      { status: 'PENDING_REFERENCE', nextReferenceAttemptAt: { $lte: now } },
+      { orderBy: { nextReferenceAttemptAt: 'asc' }, lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE },
+    );
+    return this.toDomain(record);
+  }
+
+  async claimDueOutbox(now: Date, limit: number): Promise<OutboxMessage[]> {
+    const records = await this.em.find(
+      OutboxMessageRecord,
+      { publishedAt: null, nextAttemptAt: { $lte: now } },
+      { orderBy: { nextAttemptAt: 'asc', occurredAt: 'asc' }, limit, lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE },
+    );
+    for (const record of records) this.loadedOutbox.set(record.id, record);
+    return records.map(outboxFromRecord);
+  }
+
+  saveOutbox(message: OutboxMessage, lastError?: string): void {
+    const record = this.loadedOutbox.get(message.id);
+    if (!record) throw new Error(`outbox message ${message.id} must be claimed before it is saved`);
+    this.em.assign(record, {
+      attempts: message.attempts,
+      nextAttemptAt: message.nextAttemptAt ?? record.nextAttemptAt,
+      publishedAt: message.publishedAt ?? null,
+      lastError: lastError?.slice(0, 500) ?? null,
+    });
+    this.em.persist(record);
+  }
+
   private toDomain(record: WagerTransactionRecord | null): WagerTransaction | undefined {
     if (!record) return undefined;
     this.loadedTransactions.set(record.id, record);
@@ -113,7 +154,7 @@ export class MikroOrmTransactionRunner extends TransactionRunner {
   async run<T>(work: (store: WalletStore) => Promise<T>): Promise<T> {
     try {
       return await this.orm.em.fork().transactional(async (em) => {
-        await em.execute(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
+        await em.execute(`set local lock_timeout = '${lockTimeout()}'`);
         return work(new MikroOrmWalletStore(em));
       });
     } catch (error) {

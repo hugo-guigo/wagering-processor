@@ -1,7 +1,7 @@
-// Validação de formato da entrada HTTP. Regras de valor (Money) e de negócio ficam no domínio.
-import { InvalidRequestError } from '../application/errors';
+// Validação de formato da entrada (HTTP e fila). Regras de valor (Money) e de negócio ficam no domínio.
+import { InvalidRequestError } from './errors';
 import type { MoneyProps } from '../domain/money';
-import type { WagerPayload } from '../application/payload-hash';
+import type { WagerPayload } from './payload-hash';
 
 const MAX_ID_LENGTH = 200;
 

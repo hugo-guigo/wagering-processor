@@ -1,20 +1,11 @@
-import { InsufficientFundsError } from '../domain/errors';
-import { FailureCode } from '../domain/failure-code';
 import { Money } from '../domain/money';
-import type { Wallet } from '../domain/wallet';
-import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from '../domain/wager-transaction';
-import { LedgerDirection, type WalletLedgerEntry } from '../domain/wallet-ledger-entry';
-import type { EventContext } from '../domain/events/integration-event';
-import {
-  WagerTransactionPendingReference, WagerTransactionProcessed, WagerTransactionRejected, WalletBalanceChanged,
-} from '../domain/events/wagering-events';
-import { OutboxMessage } from '../domain/messaging/outbox-message';
+import { WagerTransaction, WagerTransactionKind } from '../domain/wager-transaction';
 import { InboxMessage } from '../domain/messaging/inbox-message';
 import { IdempotencyConflictError, InvalidRequestError, UniqueViolationError } from './errors';
 import { payloadHash, type WagerPayload } from './payload-hash';
-import { nextReferenceAttemptAt } from './reference-retry-policy';
 import type { OperationContext } from './open-wallet';
 import type { Clock, IdGenerator, TransactionRunner, WalletStore } from './ports';
+import type { WagerSettlement } from './wager-settlement';
 
 const SUBMITTABLE = new Set<string>([
   WagerTransactionKind.Bet, WagerTransactionKind.Win, WagerTransactionKind.Loss,
@@ -50,6 +41,7 @@ export class ProcessWagerTransaction {
     private readonly runner: TransactionRunner,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly settlement: WagerSettlement,
   ) {}
 
   async execute(command: SubmitWagerCommand, ctx: OperationContext): Promise<WagerOutcome> {
@@ -134,97 +126,21 @@ export class ProcessWagerTransaction {
     const now = this.clock.now();
     const { tx } = draft;
 
-    const entry = await this.decide(store, tx, wallet, now);
+    const previousStatus = tx.status;
+    const entry = await this.settlement.decide(store, tx, wallet, now);
     store.addTransaction(tx);
     if (entry) {
       store.addLedgerEntry(entry);
       store.saveWallet(wallet);
     }
-    this.enqueueEvents(store, tx, wallet, entry, { correlationId: ctx.correlationId, causationId: ctx.causationId, occurredAt: now });
+    this.settlement.enqueueEvents(
+      store, tx, wallet, entry, { correlationId: ctx.correlationId, causationId: ctx.causationId, occurredAt: now }, previousStatus,
+    );
     if (command.inbox) {
       const inbox = InboxMessage.receive({ ...command.inbox, receivedAt: now });
       inbox.markProcessed(now);
       store.addInboxMessage(inbox, tx.id);
     }
     return { type: 'transaction', transaction: tx, replay: false };
-  }
-
-  /**
-   * Aplica as regras e leva a transação a PROCESSED, REJECTED ou PENDING_REFERENCE.
-   * Devolve o lançamento quando o saldo muda.
-   */
-  private async decide(store: WalletStore, tx: WagerTransaction, wallet: Wallet, now: Date): Promise<WalletLedgerEntry | undefined> {
-    const reject = (code: FailureCode) => {
-      tx.reject(code, { at: now, currentBalance: wallet.balance });
-      return undefined;
-    };
-
-    if (tx.playerId !== wallet.playerId) return reject(FailureCode.WalletPlayerMismatch);
-    if (tx.money.currency !== wallet.currency) return reject(FailureCode.CurrencyMismatch);
-
-    let reference: WagerTransaction | undefined;
-    if (tx.hasReference()) {
-      reference = await store.findTransactionByExternalId(tx.providerId, tx.referenceExternalTransactionId!);
-      const check = reference ? tx.checkReference(reference) : ({ outcome: 'wait' } as const);
-      if (check.outcome === 'wait') {
-        tx.markPendingReference({ nextAttemptAt: nextReferenceAttemptAt(now, 0), at: now, currentBalance: wallet.balance });
-        return undefined;
-      }
-      if (check.outcome === 'reject') return reject(check.code);
-      if (tx.isReversal() && await store.hasProcessedReversal(reference!.id)) {
-        return reject(FailureCode.ReferenceAlreadyReversed);
-      }
-    }
-
-    return this.apply(tx, wallet, reference, now, reject);
-  }
-
-  /** Movimenta a wallet. Usado também pelo worker de referências pendentes. */
-  apply(
-    tx: WagerTransaction,
-    wallet: Wallet,
-    reference: WagerTransaction | undefined,
-    now: Date,
-    reject: (code: FailureCode) => undefined,
-  ): WalletLedgerEntry | undefined {
-    if (!tx.affectsBalance()) {
-      tx.markProcessed({ referenceTransactionId: reference?.id, at: now, resultingBalance: wallet.balance });
-      return undefined;
-    }
-    const movement = { transactionId: tx.id, entryId: this.ids.next(), at: now };
-    try {
-      const entry = tx.ledgerDirectionFor(reference) === LedgerDirection.Debit
-        ? wallet.debit(tx.money, movement)
-        : wallet.credit(tx.money, movement);
-      tx.markProcessed({ referenceTransactionId: reference?.id, at: now, resultingBalance: wallet.balance });
-      return entry;
-    } catch (error) {
-      if (error instanceof InsufficientFundsError) {
-        return reject(tx.isReversal() ? FailureCode.ReversalInsufficientFunds : FailureCode.InsufficientFunds);
-      }
-      throw error;
-    }
-  }
-
-  enqueueEvents(
-    store: WalletStore,
-    tx: WagerTransaction,
-    wallet: Wallet,
-    entry: WalletLedgerEntry | undefined,
-    base: Omit<EventContext, 'eventId'>,
-  ): void {
-    const ctx = (): EventContext => ({ ...base, eventId: this.ids.next() });
-    switch (tx.status) {
-      case WagerTransactionStatus.Processed:
-        store.enqueue(OutboxMessage.enqueue(WagerTransactionProcessed.from(tx, ctx())));
-        if (entry) store.enqueue(OutboxMessage.enqueue(WalletBalanceChanged.from(wallet, entry, ctx())));
-        break;
-      case WagerTransactionStatus.Rejected:
-        store.enqueue(OutboxMessage.enqueue(WagerTransactionRejected.from(tx, ctx())));
-        break;
-      case WagerTransactionStatus.PendingReference:
-        store.enqueue(OutboxMessage.enqueue(WagerTransactionPendingReference.from(tx, ctx())));
-        break;
-    }
   }
 }

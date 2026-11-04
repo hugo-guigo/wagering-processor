@@ -25,6 +25,21 @@ export abstract class WalletStore {
   abstract addLedgerEntry(entry: WalletLedgerEntry): void;
   abstract enqueue(message: OutboxMessage): void;
   abstract addInboxMessage(message: InboxMessage, transactionId?: string): void;
+  abstract findInboxMessage(consumerName: string, messageId: string): Promise<InboxMessage | undefined>;
+
+  /**
+   * Uma transação PENDING_REFERENCE vencida, travada com FOR UPDATE SKIP LOCKED: vários workers
+   * (em várias instâncias) pegam linhas diferentes sem se esperar.
+   */
+  abstract claimDuePendingReference(now: Date): Promise<WagerTransaction | undefined>;
+  /** Lote de eventos não publicados e vencidos, travados com FOR UPDATE SKIP LOCKED. */
+  abstract claimDueOutbox(now: Date, limit: number): Promise<OutboxMessage[]>;
+  abstract saveOutbox(message: OutboxMessage, lastError?: string): void;
+}
+
+/** Envia eventos para o broker. Devolve, por id, o erro dos que falharam. */
+export abstract class EventPublisher {
+  abstract publish(messages: OutboxMessage[]): Promise<Map<string, string>>;
 }
 
 export abstract class TransactionRunner {
