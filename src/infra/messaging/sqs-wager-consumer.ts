@@ -66,6 +66,11 @@ export class SqsWagerConsumer {
   private loop?: Promise<void>;
   /** Base do backoff em segundos: 2, 4, 8, 16... até 60 (variável para os testes). */
   private readonly backoffBaseSeconds = Number(process.env.CONSUMER_BACKOFF_BASE_SECONDS ?? 2);
+  /**
+   * Quanto tempo a mensagem fica invisível para os outros consumidores enquanto esta instância a
+   * processa. Se a instância morrer, a mensagem volta depois disso. Padrão: 30 s.
+   */
+  private readonly visibilityTimeoutSeconds = Number(process.env.CONSUMER_VISIBILITY_TIMEOUT ?? 30);
 
   constructor(
     private readonly queues: SqsQueues,
@@ -101,6 +106,7 @@ export class SqsWagerConsumer {
         QueueUrl: await this.queues.url(QUEUES.wagers),
         MaxNumberOfMessages: 10,
         WaitTimeSeconds: waitTimeSeconds,
+        VisibilityTimeout: this.visibilityTimeoutSeconds,
         MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
       }),
       { abortSignal: this.poll.signal },
