@@ -16,6 +16,9 @@ export default defineConfig({
     migrationsList: [{ name: 'Migration20261104000001Wallets', class: Migration20261104000001Wallets }],
     transactional: true,
     allOrNothing: true,
+    // As migrations são SQL escrito à mão; o snapshot do schema gerado pelo ORM não é usado.
+    snapshot: false,
+    snapshotOnMigrate: false,
   },
   debug: false,
 });
