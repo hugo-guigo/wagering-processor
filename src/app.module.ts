@@ -15,6 +15,8 @@ import { WagerSettlement } from './application/wager-settlement';
 import { MikroOrmTransactionRunner } from './infra/database/mikro-orm-wallet-store';
 import { SqsQueues } from './infra/messaging/sqs';
 import { SqsEventPublisher } from './infra/messaging/sqs-event-publisher';
+import { SqsWagerConsumer } from './infra/messaging/sqs-wager-consumer';
+import { WorkersService } from './infra/workers/workers.service';
 import { SystemClock, UuidV7Generator } from './infra/system';
 
 // Os casos de uso não têm decorators do Nest: são montados aqui por factory, a partir das portas.
@@ -55,6 +57,8 @@ import { SystemClock, UuidV7Generator } from './infra/system';
       inject: [TransactionRunner, EventPublisher, Clock],
     },
     SqsQueues,
+    SqsWagerConsumer,
+    WorkersService,
     { provide: APP_FILTER, useClass: HttpErrorFilter },
   ],
 })
