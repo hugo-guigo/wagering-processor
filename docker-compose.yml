@@ -26,3 +26,50 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  # ---- aplicação (perfil "app"): docker compose --profile app up -d --build
+  # As migrations rodam uma vez, antes das instâncias; várias instâncias migrando juntas brigariam.
+  migrate:
+    profiles: ["app"]
+    build: .
+    image: wagering-processor:local
+    command: ["bun", "run", "scripts/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app-1: &app
+    profiles: ["app"]
+    build: .
+    image: wagering-processor:local
+    environment: &app-env
+      DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+      SQS_ENDPOINT: http://sqs:4566
+      WORKERS: ${APP_WORKERS:-consumer,publisher,references}
+      LOCK_TIMEOUT: ${APP_LOCK_TIMEOUT:-5s}
+    ports:
+      - "3001:3000"
+    # Tempo para o desligamento limpo antes do SIGKILL.
+    stop_grace_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      sqs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health/ready || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app-2:
+    <<: *app
+    ports:
+      - "3002:3000"
+
+  app-3:
+    <<: *app
+    ports:
+      - "3003:3000"
