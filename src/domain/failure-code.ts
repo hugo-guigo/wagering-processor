@@ -9,6 +9,8 @@ export enum FailureCode {
   ReversalInsufficientFunds = 'REVERSAL_INSUFFICIENT_FUNDS',
   /** Moeda da operação diferente da moeda da wallet. */
   CurrencyMismatch = 'CURRENCY_MISMATCH',
+  /** A wallet não existe. Não gera transação gravada (ver ARCHITECTURE.md). */
+  WalletNotFound = 'WALLET_NOT_FOUND',
   /** A wallet existe, mas pertence a outro playerId. */
   WalletPlayerMismatch = 'WALLET_PLAYER_MISMATCH',
   /** A referência não chegou dentro do limite de tentativas do worker. */
