@@ -5,13 +5,16 @@ import config from './infra/database/mikro-orm.config';
 import { HealthController } from './health/health.controller';
 import { WageringController, WalletsController } from './http/controllers';
 import { HttpErrorFilter } from './http/http-error.filter';
-import { Clock, IdGenerator, TransactionRunner } from './application/ports';
+import { Clock, EventPublisher, IdGenerator, TransactionRunner } from './application/ports';
 import { OpenWallet } from './application/open-wallet';
 import { ProcessWagerTransaction } from './application/process-wager-transaction';
 import { ReferenceRetryPolicy } from './application/reference-retry-policy';
+import { RelayOutbox } from './application/relay-outbox';
 import { ResolvePendingReferences } from './application/resolve-pending-references';
 import { WagerSettlement } from './application/wager-settlement';
 import { MikroOrmTransactionRunner } from './infra/database/mikro-orm-wallet-store';
+import { SqsQueues } from './infra/messaging/sqs';
+import { SqsEventPublisher } from './infra/messaging/sqs-event-publisher';
 import { SystemClock, UuidV7Generator } from './infra/system';
 
 // Os casos de uso não têm decorators do Nest: são montados aqui por factory, a partir das portas.
@@ -22,6 +25,7 @@ import { SystemClock, UuidV7Generator } from './infra/system';
     { provide: TransactionRunner, useClass: MikroOrmTransactionRunner },
     { provide: IdGenerator, useClass: UuidV7Generator },
     { provide: Clock, useClass: SystemClock },
+    { provide: EventPublisher, useClass: SqsEventPublisher },
     { provide: ReferenceRetryPolicy, useFactory: () => ReferenceRetryPolicy.fromEnv() },
     {
       provide: WagerSettlement,
@@ -45,6 +49,12 @@ import { SystemClock, UuidV7Generator } from './infra/system';
         new ResolvePendingReferences(runner, clock, settlement),
       inject: [TransactionRunner, Clock, WagerSettlement],
     },
+    {
+      provide: RelayOutbox,
+      useFactory: (runner: TransactionRunner, publisher: EventPublisher, clock: Clock) => new RelayOutbox(runner, publisher, clock),
+      inject: [TransactionRunner, EventPublisher, Clock],
+    },
+    SqsQueues,
     { provide: APP_FILTER, useClass: HttpErrorFilter },
   ],
 })

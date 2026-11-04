@@ -21,4 +21,6 @@ cat > /tmp/atributos.json <<JSON
 }
 JSON
 awslocal sqs create-queue --queue-name wager-transactions.fifo --attributes file:///tmp/atributos.json
+# Eventos de integração publicados pela outbox. MessageGroupId = walletId; deduplicação pelo eventId.
+awslocal sqs create-queue --queue-name wagering-events.fifo   --attributes FifoQueue=true,ContentBasedDeduplication=false
 echo "filas criadas"
