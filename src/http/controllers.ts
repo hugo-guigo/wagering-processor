@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { OpenWallet } from '../application/open-wallet';
 import { ProcessWagerTransaction } from '../application/process-wager-transaction';
 import { ReconcileWallet, WalletQueries } from '../application/queries';
@@ -9,6 +9,7 @@ import {
 import { log } from '../infra/observability/logger';
 import { metrics } from '../infra/observability/metrics';
 import { recordOutcome } from '../infra/observability/record-outcome';
+import { ProviderAuthGuard } from './provider-auth.guard';
 import { wagerResponse, type WagerResponseBody } from './responses';
 import { ledgerItemView, reconciliationView, transactionView, walletView } from './views';
 
@@ -24,6 +25,7 @@ export function correlationId(header: string | undefined): string {
 const uuid = (value: string, field: string) => requireUuid({ [field]: value }, field);
 
 @Controller('wallets')
+@UseGuards(ProviderAuthGuard)
 export class WalletsController {
   constructor(
     private readonly openWallet: OpenWallet,
@@ -72,6 +74,7 @@ export class WalletsController {
 }
 
 @Controller()
+@UseGuards(ProviderAuthGuard)
 export class TransactionsController {
   constructor(
     private readonly processWager: ProcessWagerTransaction,
