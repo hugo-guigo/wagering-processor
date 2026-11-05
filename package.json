@@ -7,8 +7,8 @@
     "migrate": "bun run scripts/migrate.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "LOG_LEVEL=error bun test test/unit",
-    "test:integration": "LOG_LEVEL=error bun test test/integration",
-    "test:concurrency": "LOG_LEVEL=error bun test test/concurrency"
+    "test:integration": "LOG_LEVEL=error bun test --preload ./test/support/invariant.ts test/integration",
+    "test:concurrency": "LOG_LEVEL=error bun test --preload ./test/support/invariant.ts test/concurrency"
   },
   "devDependencies": {
     "@types/bun": "latest",

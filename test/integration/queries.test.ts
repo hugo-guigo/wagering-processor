@@ -97,6 +97,12 @@ describe('reconciliação', () => {
 
     const metricas = (await get('/metrics')).body as string;
     expect(metricas).toMatch(/wagering_reconciliation_divergences_total [1-9]/);
+
+    // Desfaz a corrupção simulada, para a invariante conferida depois de cada teste valer.
+    await sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      await tx`update wallets set balance_minor = balance_minor - 1 where id = ${w.walletId}`;
+    });
   });
 });
 
