@@ -1,9 +1,12 @@
 // SIGTERM de verdade, num container Linux (no Windows não existe SIGTERM para processo de console).
 // Sobe o app-1 do compose, deixa uma mensagem em andamento e manda `docker compose stop`.
+// As 3 mensagens são da mesma wallet (mesmo MessageGroupId na FIFO): ficam na fila antes de o
+// container subir, para o consumidor receber as 3 juntas. Enviadas com ele já lendo, ele poderia
+// receber só a primeira e o grupo travaria as outras, e o teste dependeria de timing.
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test';
 import { GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
-import { resetSchema, sql } from '../integration/support/database';
-import { createWallet, ledgerSnapshot, wager } from '../support/app';
+import { resetSchema, seedWallet, sql } from '../integration/support/database';
+import { ledgerSnapshot, wager } from '../support/app';
 import { drain, purgeQueues, queueUrl, sendWagerMessage, sqs } from '../support/sqs';
 import { waitUntil } from '../support/instances';
 import { QUEUES } from '../../src/infra/messaging/sqs';
@@ -26,7 +29,7 @@ async function compose(...args: string[]): Promise<string> {
 beforeAll(async () => {
   await resetSchema();
   await purgeQueues();
-  await compose('up', '-d', '--build', '--wait', 'app-1');
+  await compose('build', 'app-1');
 });
 
 afterAll(async () => {
@@ -34,7 +37,7 @@ afterAll(async () => {
 });
 
 test('SIGTERM: termina a mensagem em andamento, devolve as outras e sai com código 0', async () => {
-  const w = await createWallet(APP_URL, '100.00');
+  const w = await seedWallet(10_000n);
   for (const valor of ['10.00', '20.00', '30.00']) {
     const op = wager(w, { money: { amount: valor, currency: 'BRL' } });
     await sendWagerMessage({ ...op.body, idempotencyKey: op.key });
@@ -51,6 +54,8 @@ test('SIGTERM: termina a mensagem em andamento, devolve as outras e sai com cód
     await liberada;
   });
   await travada;
+  await compose('up', '-d', '--wait', 'app-1');
+  expect((await fetch(`${APP_URL}/health/ready`)).status).toBe(200);
   await waitUntil('mensagens em processamento no container', async () => {
     const { Attributes } = await sqs.send(new GetQueueAttributesCommand({
       QueueUrl: await queueUrl(QUEUES.wagers), AttributeNames: ['ApproximateNumberOfMessagesNotVisible'],
