@@ -60,6 +60,7 @@ No perfil `app`, um serviço `migrate` roda as migrations uma vez antes das inst
 bun test                    # unidade (98)
 bun run test:integration    # integração (89): PostgreSQL e MiniStack reais
 bun run test:concurrency    # concorrência (10): processos separados e SIGTERM em container
+bun run test:load           # carga: 3 instâncias, ~1 min; resultado em docs/carga-resultado.md
 bun run typecheck
 ```
 
@@ -68,6 +69,8 @@ bun run typecheck
 - A suíte de concorrência leva cerca de 1 minuto: sobe instâncias do app como processos separados
   (portas 3200 a 3699) e constrói a imagem Docker para o teste de SIGTERM (porta 3001).
 - Nenhum teste troca o PostgreSQL ou o SQS por mock.
+- O teste de carga também apaga o schema. Metodologia, números e análise na seção 17 do
+  ARCHITECTURE.md.
 - Depois de cada teste de integração e de concorrência, um hook global confere, para todas as
   wallets do banco, que o saldo gravado é igual ao saldo reconstruído pelo ledger.
 

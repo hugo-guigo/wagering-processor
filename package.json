@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "LOG_LEVEL=error bun test test/unit",
     "test:integration": "LOG_LEVEL=error bun test --preload ./test/support/invariant.ts test/integration",
-    "test:concurrency": "LOG_LEVEL=error bun test --preload ./test/support/invariant.ts test/concurrency"
+    "test:concurrency": "LOG_LEVEL=error bun test --preload ./test/support/invariant.ts test/concurrency",
+    "test:load": "LOG_LEVEL=error bun run test/load/run.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -343,7 +343,57 @@ por mock. Depois de cada teste de integração e de concorrência, um hook globa
 invariante `saldo da wallet == saldo reconstruído pelo ledger` para todas as wallets do banco.
 O mapa dos testes obrigatórios está no README.
 
-## 17. Limitações
+## 17. Teste de carga
+
+`bun run test:load` (script em `test/load/run.ts`, metodologia no topo dele). Resultado da última
+rodada em [docs/carga-resultado.md](docs/carga-resultado.md).
+
+**Ambiente.** i3-9100F (4 núcleos), 16 GB, Windows 10, Docker Desktop. O gerador de carga, as 3
+instâncias do app, o PostgreSQL e o MiniStack rodam na mesma máquina e disputam os mesmos 4
+núcleos. Os números descrevem esse conjunto; não são o limite do serviço numa máquina dedicada.
+
+**Metodologia.** 3 instâncias como processos separados, com todos os workers ligados. O gerador
+mantém N requisições em voo (laço fechado), alternando entre as instâncias. Cada requisição é
+uma BET de 1,00 com idempotency key nova, em wallets com saldo de sobra: tudo que não for 201
+conta como erro. Dois cenários de 20 s, depois de 3 s de aquecimento: 200 wallets sorteadas
+(distribuído) e uma wallet só (quente). A outbox é lida a cada 250 ms durante a medição. No fim,
+a invariante saldo == ledger é conferida em todas as wallets, a wallet quente é reconciliada e
+procura-se transação com mais de um lançamento.
+
+**Resultados** (duas rodadas, com 8 e com 32 requisições em voo):
+
+| Cenário | Em voo | req/s | p50 (ms) | p95 (ms) | p99 (ms) | Erros | Lag máx. da outbox |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| distribuído | 8 | 95 | 78 | 151 | 188 | 0% | 1,1 s |
+| distribuído | 32 | 150 | 200 | 359 | 470 | 0% | 14,6 s |
+| wallet quente | 8 | 61 | 125 | 223 | 309 | 0% | 0,2 s |
+| wallet quente | 32 | 49 | 595 | 1364 | 2166 | 0% | 0,7 s |
+
+Nas duas rodadas: nenhum conflito de lock (lock_timeout ou deadlock), nenhuma divergência entre
+saldo e ledger, reconciliação consistente e nenhuma transação com dois lançamentos.
+
+**Análise.**
+
+- **Distribuído.** De 8 para 32 em voo, o throughput sobe 58% (95 para 150 req/s) e o p50 quase
+  triplica (78 para 200 ms). A espera pelo lock continua pequena (média de 16 ms), então o tempo
+  a mais é fila por CPU e por conexão do pool, não disputa por wallet. Com 4 núcleos para tudo, a
+  máquina satura perto de 150 req/s.
+- **Wallet quente.** É o custo esperado do lock por wallet: as operações passam uma de cada vez.
+  O throughput não cresce com mais concorrência (61 para 49 req/s) e a espera média pelo lock vai
+  de 108 para 498 ms. O p99 de 2,2 s ainda fica abaixo do `lock_timeout` de 5 s, por isso nenhum
+  503. Com mais concorrência numa wallet só, a espera passaria do teto e as operações
+  receberiam 503 (transitório, o provedor reenvia). É o trade-off da seção 5: correção primeiro,
+  com a espera medida e com teto.
+- **Outbox.** O achado principal. Com 150 apostas/s entram cerca de 300 eventos/s (Processed e
+  WalletBalanceChanged), e os 3 publishers, publicando um lote de 10 por vez em série, esvaziaram
+  cerca de 190 eventos/s nesta máquina. O lag chegou a 14,6 s, com 4.546 eventos pendentes, e a
+  outbox levou 24 s para esvaziar depois que a carga parou. Nenhum evento foi perdido: o atraso é
+  medido (`wagering_outbox_lag_seconds`) e se recupera sozinho. Com 95 req/s o lag ficou em 1,1 s.
+  Para aguentar mais, o próximo passo seria publicar vários lotes em paralelo em cada instância
+  (cada lote já trava linhas diferentes com `SKIP LOCKED`), ou lotes maiores divididos em vários
+  SendMessageBatch simultâneos. Não fiz essa mudança.
+
+## 18. Limitações
 
 - **Correlação no worker.** A transação não guarda o correlationId original; os eventos que o
   worker de pendências gera usam o id da transação como correlationId e causationId.
@@ -354,9 +404,12 @@ O mapa dos testes obrigatórios está no README.
   inteira e nada é gravado: o HTTP responde 500 e a fila tenta de novo até a DLQ.
 - **Erro no worker conta como tentativa.** Um lock_timeout que se repetisse por cerca de 5
   minutos na mesma wallet levaria a pendência a FAILED, mesmo sendo transitório.
-- **Lock pessimista serializa a wallet.** Uma wallet muito quente processa uma operação por vez,
-  e acima do `lock_timeout` as operações recebem 503. Não medi o limite: o teste de carga
-  (`test:load`) não foi feito.
+- **Lock pessimista serializa a wallet.** Uma wallet muito quente processa uma operação por vez
+  (cerca de 50 a 60 por segundo no teste de carga, nesta máquina), e acima do `lock_timeout` as
+  operações recebem 503.
+- **Publisher da outbox mais lento que a entrada sob carga sustentada.** No teste de carga, a
+  150 req/s o lag chegou a 14,6 s (seção 17). Sem perda, mas com atraso.
+- **Teste de carga numa máquina só**, com gerador, app, banco e emulador disputando 4 núcleos.
 - **Interpretação de reversão** mais estrita que o texto (seção 8 deste documento).
 - **Deduplicação de eventos fora da janela da FIFO** fica com quem consome (`eventId`). Este
   repositório não tem consumidor de eventos.
