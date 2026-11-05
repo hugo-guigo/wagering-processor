@@ -5,7 +5,8 @@ import { WagerTransactionStatus, type WagerTransaction } from '../domain/wager-t
 import { LedgerDirection, type WalletLedgerEntry } from '../domain/wallet-ledger-entry';
 import type { EventContext } from '../domain/events/integration-event';
 import {
-  WagerTransactionPendingReference, WagerTransactionProcessed, WagerTransactionRejected, WalletBalanceChanged,
+  WagerTransactionFailed, WagerTransactionPendingReference, WagerTransactionProcessed, WagerTransactionRejected,
+  WalletBalanceChanged,
 } from '../domain/events/wagering-events';
 import { OutboxMessage } from '../domain/messaging/outbox-message';
 import type { ReferenceRetryPolicy } from './reference-retry-policy';
@@ -52,6 +53,20 @@ export class WagerSettlement {
   }
 
   /** Referência ausente (ou ainda pendente): primeira espera, nova tentativa ou desistência. */
+  /**
+   * A tentativa do worker terminou em erro, não numa decisão. Conta como tentativa gasta, com o
+   * mesmo backoff da espera pela referência, para a pendência sair da frente da fila. Esgotado o
+   * limite, FAILED: erro permanente, terminal e auditável.
+   */
+  recordFailedAttempt(tx: WagerTransaction, now: Date): void {
+    const attempts = tx.referenceAttempts + 1;
+    if (this.retry.exhausted(attempts)) {
+      tx.fail(FailureCode.PermanentProcessingError, { at: now });
+      return;
+    }
+    tx.scheduleReferenceRetry({ nextAttemptAt: this.retry.nextAttemptAt(now, attempts), at: now });
+  }
+
   private wait(
     tx: WagerTransaction,
     reference: WagerTransaction | undefined,
@@ -118,6 +133,9 @@ export class WagerSettlement {
         break;
       case WagerTransactionStatus.Rejected:
         store.enqueue(OutboxMessage.enqueue(WagerTransactionRejected.from(tx, ctx())));
+        break;
+      case WagerTransactionStatus.Failed:
+        store.enqueue(OutboxMessage.enqueue(WagerTransactionFailed.from(tx, ctx())));
         break;
       case WagerTransactionStatus.PendingReference:
         if (previousStatus !== WagerTransactionStatus.PendingReference) {

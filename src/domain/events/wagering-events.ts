@@ -72,6 +72,24 @@ export class WagerTransactionRejected extends IntegrationEvent<WagerTransactionR
   }
 }
 
+export interface WagerTransactionFailedData extends TransactionRef {
+  failureCode: string;
+}
+
+/** Erro permanente de processamento (FAILED). Não é rejeição de negócio: alguém precisa olhar. */
+export class WagerTransactionFailed extends IntegrationEvent<WagerTransactionFailedData> {
+  readonly eventType = 'WagerTransactionFailed';
+  readonly version = 1;
+
+  static from(tx: WagerTransaction, ctx: EventContext): WagerTransactionFailed {
+    return new WagerTransactionFailed({
+      ...ctx,
+      aggregateId: tx.walletId,
+      data: { ...transactionRef(tx), failureCode: tx.failureCode! },
+    });
+  }
+}
+
 export interface WagerTransactionPendingReferenceData extends TransactionRef {
   referenceExternalTransactionId: string;
   nextAttemptAt: string;

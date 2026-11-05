@@ -73,6 +73,10 @@ class MikroOrmWalletStore extends WalletStore {
     return this.toDomain(await this.em.findOne(WagerTransactionRecord, { id }));
   }
 
+  async lockTransaction(id: string): Promise<WagerTransaction | undefined> {
+    return this.toDomain(await this.em.findOne(WagerTransactionRecord, { id }, { lockMode: LockMode.PESSIMISTIC_WRITE }));
+  }
+
   async findTransactionByIdempotencyKey(key: string): Promise<WagerTransaction | undefined> {
     return this.toDomain(await this.em.findOne(WagerTransactionRecord, { idempotencyKey: key }));
   }

@@ -44,6 +44,8 @@ export abstract class WalletStore {
    * (em várias instâncias) pegam linhas diferentes sem se esperar.
    */
   abstract claimDuePendingReference(now: Date): Promise<WagerTransaction | undefined>;
+  /** A transação, travada com FOR UPDATE (espera se outro worker estiver com ela). */
+  abstract lockTransaction(id: string): Promise<WagerTransaction | undefined>;
   /** Lote de eventos não publicados e vencidos, travados com FOR UPDATE SKIP LOCKED. */
   abstract claimDueOutbox(now: Date, limit: number): Promise<OutboxMessage[]>;
   abstract saveOutbox(message: OutboxMessage, lastError?: string): void;

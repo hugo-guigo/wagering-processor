@@ -160,6 +160,44 @@ describe('referência fora de ordem', () => {
     expect(await ledgerSnapshot(w.walletId)).toMatchObject({ balance: 10_000n, debits: 0 });
   });
 
+  test('pendência que dá erro em toda tentativa: não trava as outras e, esgotado o limite, vira FAILED com evento', async () => {
+    /** REFUND que chega antes da BET; depois a BET chega e a pendência fica pronta para o worker. */
+    const pendente = async (w: { walletId: string; playerId: string }) => {
+      const bet = wager(w, { money: brl('10.00') });
+      const refund = wager(w, { kind: 'REFUND', referenceExternalTransactionId: bet.body.externalTransactionId, money: brl('10.00') });
+      const r = await submit(url, refund);
+      expect(r.status).toBe(202);
+      await submit(url, bet);
+      return r.body.transactionId as string;
+    };
+    const quebrada = await novaWallet('100.00');
+    const boa = await novaWallet('100.00');
+    const idQuebrada = await pendente(quebrada); // a mais antiga: o worker pega esta primeiro
+    const idBoa = await pendente(boa);
+
+    // Trigger só deste teste: aplicar esta pendência sempre falha, com um erro que não é transitório.
+    await sql.unsafe(`create function teste_pendencia_quebrada() returns trigger language plpgsql as $$
+      begin
+        if new.id = '${idQuebrada}' and new.status = 'PROCESSED' then raise exception 'falha simulada'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger teste_pendencia_quebrada before update on wager_transactions
+      for each row execute function teste_pendencia_quebrada()`);
+    try {
+      await drenarPendencias();
+    } finally {
+      await sql.unsafe('drop trigger teste_pendencia_quebrada on wager_transactions');
+      await sql.unsafe('drop function teste_pendencia_quebrada()');
+    }
+
+    expect(await statusDe(idBoa)).toEqual({ status: 'PROCESSED', failure_code: null });
+    expect(await statusDe(idQuebrada)).toEqual({ status: 'FAILED', failure_code: 'PERMANENT_PROCESSING_ERROR' });
+    expect(await ledgerSnapshot(quebrada.walletId)).toMatchObject({ balance: 9_000n, debits: 1, credits: 1 });
+    const [{ n }] = await sql`select count(*)::int as n from outbox_messages
+      where event_type = 'WagerTransactionFailed' and payload->'data'->>'transactionId' = ${idQuebrada}`;
+    expect(n).toBe(1);
+  });
+
   test('dois workers ao mesmo tempo sobre as mesmas pendências: cada uma é aplicada uma vez só', async () => {
     const wallets = await Promise.all(Array.from({ length: 5 }, () => novaWallet('100.00')));
     const bets = wallets.flatMap((w) => [wager(w, { money: brl('10.00') }), wager(w, { money: brl('5.00') })]);

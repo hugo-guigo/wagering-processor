@@ -3,6 +3,7 @@ import { RelayOutbox } from '../../application/relay-outbox';
 import { ResolvePendingReferences } from '../../application/resolve-pending-references';
 import { SqsWagerConsumer } from '../messaging/sqs-wager-consumer';
 import { BackgroundLoop } from './background-loop';
+import { log } from '../observability/logger';
 import { metrics } from '../observability/metrics';
 
 /** Quais trabalhos de fundo esta instância roda. Padrão: todos. WORKERS="" desliga (testes). */
@@ -35,6 +36,9 @@ export class WorkersService implements OnApplicationBootstrap, BeforeApplication
       this.loops.push(new BackgroundLoop('pending-references', async () => {
         const result = await this.references.runOnce();
         if (result.rescheduled > 0) metrics.retries.inc({ component: 'reference' }, result.rescheduled);
+        for (const { transactionId, error } of result.errors) {
+          log.error({ event: 'reference.attempt_failed', transactionId, error }, 'pending reference attempt failed');
+        }
         for (const { status, kind } of result.outcomes) {
           if (status !== 'PENDING_REFERENCE') metrics.transactions.inc({ status, kind, source: 'worker' });
         }
