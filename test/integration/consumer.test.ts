@@ -63,6 +63,46 @@ test('processa a mensagem, grava o inbox na mesma transação e só então apaga
   expect(await drain(QUEUES.wagers)).toHaveLength(0);
 });
 
+test('atomicidade: se o COMMIT falha, não fica transação, saldo, ledger, inbox nem outbox, e a mensagem volta', async () => {
+  const w = await createWallet(url, '100.00');
+  const messageId = await sendWagerMessage(dados(w, { money: brl('30.00') }));
+  const contar = async () => {
+    const [row] = await sql`select
+        (select count(*) from inbox_messages where message_id = ${messageId})::int as inbox,
+        (select count(*) from outbox_messages where aggregate_id = ${w.walletId})::int as outbox,
+        (select version from wallets where id = ${w.walletId}) as version`;
+    return row as { inbox: number; outbox: number; version: number };
+  };
+  const antes = await contar();
+
+  // Trigger só deste teste, adiado para o COMMIT: falha depois que a transação já escreveu tudo.
+  await sql.unsafe(`create function teste_falha_no_commit() returns trigger language plpgsql as $$
+    begin
+      if new.aggregate_id = '${w.walletId}' then raise exception 'falha simulada no COMMIT'; end if;
+      return null;
+    end $$`);
+  await sql.unsafe(`create constraint trigger teste_falha_no_commit after insert on outbox_messages
+    deferrable initially deferred for each row execute function teste_falha_no_commit()`);
+  try {
+    await consumer.consumeOnce(0);
+  } finally {
+    await sql.unsafe('drop trigger teste_falha_no_commit on outbox_messages');
+    await sql.unsafe('drop function teste_falha_no_commit()');
+  }
+
+  expect(await contar()).toEqual(antes);
+  expect(await transacoesDa(w.walletId)).toHaveLength(0);
+  expect(await ledgerSnapshot(w.walletId)).toMatchObject({ balance: 10_000n, debits: 0 });
+
+  // Sem ack, a mensagem volta; sem o trigger, tudo é gravado junto, uma vez.
+  await consumer.consumeOnce(0);
+  expect(await ledgerSnapshot(w.walletId)).toMatchObject({ balance: 7_000n, debits: 1 });
+  const depois = await contar();
+  expect(depois.inbox).toBe(1);
+  expect(depois.outbox).toBeGreaterThan(antes.outbox);
+  expect(await drain(QUEUES.wagers)).toHaveLength(0);
+});
+
 test('a mesma mensagem entregue duas vezes: um débito só, as duas confirmadas', async () => {
   const w = await createWallet(url, '100.00');
   const d = dados(w, { money: brl('30.00') });
