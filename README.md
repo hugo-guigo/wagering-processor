@@ -14,7 +14,7 @@ As decisões, os trade-offs e as limitações estão em [ARCHITECTURE.md](ARCHIT
 
 O projeto foi feito com o Claude Code, no fluxo especificação, execução e revisão. Cada bloco
 começou por uma especificação curta do que seria feito e por quê. Depois veio a implementação em
-passos pequenos, com testes contra PostgreSQL e SQS reais. Por último, a minha revisão antes do
+passos pequenos, com testes sem mocks, contra PostgreSQL e SQS emulado localmente pelo MiniStack. Por último, a minha revisão antes do
 bloco seguinte. As decisões ficaram registradas com a alternativa recusada e o motivo.
 
 Alguns problemas que os testes e a revisão pegaram no caminho:
